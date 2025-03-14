@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Single-user database for now, created on first launch, so no need to upload mine to git
+*.db
+
 # C extensions
 *.so
 
