@@ -19,7 +19,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 
-# Database setup
+W, H = 1920, 1080
+
 conn = sqlite3.connect("memory_map.db")
 cursor = conn.cursor()
 
@@ -97,7 +98,7 @@ class MemoryApp(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Memory Map")
-        self.setGeometry(100, 100, 1920, 1080)
+        self.setGeometry(100, 100, W, H)
 
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -156,7 +157,6 @@ class MemoryApp(QMainWindow):
             right_scrollables_layout = QVBoxLayout(content)
             scroll.setWidget(content)
             scroll.setWidgetResizable(True)
-            # scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.list_widgets[list_name] = (scroll, right_scrollables_layout)
             self.right_layout.addWidget(scroll)
 
@@ -165,24 +165,13 @@ class MemoryApp(QMainWindow):
         layout.addWidget(left_panel, 1)
         layout.addWidget(right_content, 1)
 
-    def refresh_view(self):
-        # Clear existing widgets
-        # while self.child_grid.count():
-        for child_widget in self.child_grid_widgets:
-            # item = self.child_grid.takeAt(0)
-            # widget = item.widget()
-            if child_widget:
-                child_widget.deleteLater()
-        self.child_grid_widgets = []
+    def prepare_childs_layout(self, not_nested_parent, nested_parent = None):
 
-        # Update parent label
-        self.parent_label.setText(self.get_timeframe_label(self.current_parent))
+        parent = not_nested_parent if not_nested_parent else nested_parent
 
-        # Create child buttons
-        letters = self.current_parent.get_child_letters()
+        layout_prepared = QVBoxLayout()
 
-        # row, col = 0, 0
-        # max_cols = 4 if len(letters) <= 8 else 6
+        letters = parent.get_child_letters()
 
         grid_structure = []
         if len(letters) == 9:
@@ -209,27 +198,69 @@ class MemoryApp(QMainWindow):
                 letter = letters[button_idx]
 
                 selected_records = self.fetch_selected_for_record(
-                    self.current_parent.key + letter
+                    parent.key + letter
                 )
+
+                btn_text = ""
                 selected_record_text = ""
                 if selected_records:
                     selected_record_text = selected_records[0][RAW_QUERY_TEXT]
-                btn = QPushButton(
-                    self.get_timeframe_label(None, self.current_parent.key + letter)
-                    + "\n"
-                    + selected_record_text
-                )
-                btn.setCheckable(True)
-                btn.clicked.connect(lambda _, l=letter: self.select_child(l))
-
-                if not self.is_valid_child(letter):
+                
+                btn_text = self.get_timeframe_label(None, parent.key + letter)+ "\n" + selected_record_text
+                
+                if nested_parent:
+                    btn = QPushButton(btn_text)
+                else:
+                    btn = QPushButton()
+                
+                child_time_node = TimeNode(parent.key + letter)
+                if not nested_parent:
+                    btn.setMinimumHeight(H//len(grid_structure))
+                    btn.setCheckable(True)
+                    btn.clicked.connect(lambda _, l=letter: self.select_child(l))
+                    parent_layout = QVBoxLayout()
+                    parent_layout.addWidget(QLabel(btn_text))
+                    nested_layout = self.prepare_childs_layout(None, child_time_node)
+                    parent_layout.addLayout(nested_layout)
+                    btn.setLayout(parent_layout)
+                
+                if nested_parent:
+                    btn.setEnabled(False)
+                    
+                childs_validity = list(self.is_valid_child(child_time_node.key+_) for _ in child_time_node.get_child_letters())
+                print(childs_validity)
+                any_valid_childs = True in childs_validity
+                print(any_valid_childs)
+                # TODO - process leafes
+                if not any_valid_childs:
                     btn.setEnabled(False)
 
-                self.child_grid_widgets.append(btn)
+                if not nested_parent:
+                    self.child_grid_widgets.append(btn)
+
                 current_child_layout.addWidget(btn)
                 button_idx += 1
 
-            self.child_grid.addLayout(current_child_layout)
+            
+            layout_prepared.addLayout(current_child_layout)
+        
+        return layout_prepared
+        
+
+
+
+    def refresh_view(self):
+        for child_widget in self.child_grid_widgets:
+            if child_widget:
+                child_widget.deleteLater()
+        self.child_grid_widgets = []
+
+        # Update parent label
+        self.parent_label.setText(self.get_timeframe_label(self.current_parent))
+
+
+        self.child_grid.addLayout(self.prepare_childs_layout(self.current_parent))
+
 
 
         # Update navigation buttons
@@ -360,15 +391,15 @@ class MemoryApp(QMainWindow):
                 record_layout = QHBoxLayout(widget)
 
                 text = QLabel(record["text"])
-                edit_btn = QPushButton("Edit")
-                check_above = QCheckBox("Show Above")
+                edit_btn = QPushButton("E")
+                check_above = QCheckBox("▲")
                 check_above.setChecked(record["show_above"])
                 check_above.stateChanged.connect(
                     lambda state, r=record, n=self.selected_child: self.set_check_above(
                         state, r, n
                     )
                 )
-                check_below = QCheckBox("Show Below")
+                check_below = QCheckBox("▼")
                 check_below.setChecked(record["show_below"])
                 check_below.stateChanged.connect(
                     lambda state, r=record, n=self.selected_child: self.set_check_below(
@@ -463,36 +494,38 @@ class MemoryApp(QMainWindow):
                     start_date += relativedelta(hours=idx * amount)
                     end_date = start_date + relativedelta(hours=amount)
 
-            # TODO lables completely not functional, also formats should be more context-dependent
+            # TODO lables are better - still could be cleaned up
             if key and len(key) == 1:
                 return f"{start_date.strftime('%Y')} - {end_date.strftime('%Y')}"
             elif key and len(key) == 2:
-                return f"{start_date.strftime('%Y')} - {end_date.strftime('%Y')}"
+                return f"{start_date.strftime('%Y')}"
+                # return f"{start_date.strftime('%Y')} - {end_date.strftime('%Y')}"
             elif key and len(key) == 3:
-                return f"{start_date.strftime('%m')} - {end_date.strftime('%m')}"
+                return f"{start_date.strftime('%Y')} : {start_date.strftime('%b')} - {end_date.strftime('%b')}"
             elif key and len(key) == 4:
-                return f"{start_date.strftime('%d')} - {end_date.strftime('%d')}"
+                return f"{start_date.strftime('%Y')} : {start_date.strftime('%b')}"
             elif key and len(key) == 5:
-                return f"{start_date.strftime('%H')} - {end_date.strftime('%H')}"
+                return f"{start_date.strftime('%Y')} {start_date.strftime('%b')} : {start_date.strftime('%d')} - {end_date.strftime('%d')}"
             elif key and len(key) == 6:
-                return f"{start_date.strftime('%H')} - {end_date.strftime('%H')}"
+                return f"{start_date.strftime('%Y')} {start_date.strftime('%b')} {start_date.strftime('%d')}"
+            elif key and len(key) == 7:
+                return f"{start_date.strftime('%Y')} {start_date.strftime('%b')} {start_date.strftime('%d')} : {start_date.strftime('%H')} - {end_date.strftime('%H')}"
+            elif key and len(key) == 8:
+                return f"{start_date.strftime('%Y')} {start_date.strftime('%b')} {start_date.strftime('%d')} : {start_date.strftime('%H')}"
             else:
                 return f"{start_date.strftime('%Y-%m-%d %H')} - {end_date.strftime('%Y-%m-%d %H')}"
         except Exception as e:
             return f"Timeframe Error: {str(e)}"
 
-    def is_valid_child(self, letter):
+    def is_valid_child(self, test_key):
         try:
             if not self.user_birthdate:
                 print("No birthdate error?")
                 return False
             
-
-            test_key = self.current_parent.key + letter
             now = datetime.now()
 
-            # Calculate end date for this key
-            current_date = self.user_birthdate
+            current_date = self.user_birth_year
             for level, (_, count, unit, amount) in enumerate(TimeNode.LEVELS):
                 if level >= len(test_key):
                     break
@@ -507,7 +540,6 @@ class MemoryApp(QMainWindow):
                 elif unit == "hours":
                     current_date += relativedelta(hours=idx * amount)
 
-            # TODO fix >= user_birthdate not working
             return current_date <= now and current_date >= self.user_birthdate
         except Exception as e:
             print(f"is_valid_child exception {e}")
@@ -538,7 +570,7 @@ class MemoryApp(QMainWindow):
                 while show_below_parent:
                     queries.append(
                         "(origin = ? AND show_below = 1)"
-                    )  # SQLite uses 1 for True
+                    )
                     params.append(show_below_parent)
                     show_below_parent = show_below_parent[
                         :-1
@@ -578,7 +610,6 @@ class MemoryApp(QMainWindow):
             QMessageBox.critical(self, "Database Error", str(e))
             return []
 
-    # [Add these missing UI refresh fixes]
     def get_user_birthdate(self):
         cursor.execute("SELECT birthdate FROM user LIMIT 1")
         result = cursor.fetchone()
@@ -593,7 +624,7 @@ class MemoryApp(QMainWindow):
                         "INSERT INTO user (birthdate) VALUES (?)", (birthdate,)
                     )
                     conn.commit()
-                    self.refresh_view()  # Critical fix: Refresh after setting birthdate
+                    self.refresh_view()
                     return dt
                 except Exception as e:
                     QMessageBox.critical(
