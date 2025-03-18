@@ -1,5 +1,6 @@
 import sys
 import sqlite3
+import re
 from datetime import datetime
 from dateutil.relativedelta import relativedelta, MO
 from PyQt5.QtWidgets import (
@@ -47,7 +48,7 @@ cursor.execute(
         origin TEXT NOT NULL,
         text TEXT NOT NULL,
         show_above BOOLEAN NOT NULL DEFAULT 0,
-        show_below BOOLEAN NOT NULL DEFAULT 1,
+        show_below BOOLEAN NOT NULL DEFAULT 0,
         selected_list TEXT,
         UNIQUE(origin, text)
     )
@@ -92,6 +93,7 @@ class MemoryApp(QMainWindow):
         self.user_birthdate = self.get_user_birthdate()
         self.user_birth_year = datetime(year = self.user_birthdate.year, month=1,day=1)
         self.init_ui()
+        self.unpushed_commits = {}
         print("init_ui OK")
         self.refresh_view()
         print("refresh_view OK")
@@ -165,6 +167,25 @@ class MemoryApp(QMainWindow):
         layout.addWidget(left_panel, 1)
         layout.addWidget(right_content, 1)
 
+    def get_title(self, record_text):
+        match = re.search(r'\[(.*?)\]', record_text)
+
+        if match:
+            return match.group(1)
+        return record_text[:12]+"..."
+    
+    def get_body(self, record_text):
+        match = re.search(r'\[(.*?)\]', record_text)
+
+        title = ""
+        if match:
+            title = match.group(1)
+        
+        if title:
+            return record_text.replace("["+title+"]", "")
+        else:
+            return record_text
+
     def prepare_childs_layout(self, not_nested_parent, nested_parent = None):
 
         parent = not_nested_parent if not_nested_parent else nested_parent
@@ -204,7 +225,7 @@ class MemoryApp(QMainWindow):
                 btn_text = ""
                 selected_record_text = ""
                 if selected_records:
-                    selected_record_text = selected_records[0][RAW_QUERY_TEXT]
+                    selected_record_text = self.get_title(selected_records[0][RAW_QUERY_TEXT])
                 
                 btn_text = self.get_timeframe_label(None, parent.key + letter)+ "\n" + selected_record_text
                 
@@ -228,9 +249,7 @@ class MemoryApp(QMainWindow):
                     btn.setEnabled(False)
                     
                 childs_validity = list(self.is_valid_child(child_time_node.key+_) for _ in child_time_node.get_child_letters())
-                print(childs_validity)
                 any_valid_childs = True in childs_validity
-                print(any_valid_childs)
                 # TODO - process leafes
                 if not any_valid_childs:
                     btn.setEnabled(False)
@@ -304,13 +323,9 @@ class MemoryApp(QMainWindow):
         rec_id = record["id"]
         print(f" DELETE record id is {rec_id}")
 
-        cursor.execute(
-            """
-            DELETE FROM record 
-            WHERE id = ?
-            """,
-            str(record["id"]),
-        )
+        record_id = str(record["id"])
+
+        cursor.execute('DELETE FROM record WHERE id = ?',[record_id])
 
         # Commit and close
         conn.commit()
@@ -358,8 +373,62 @@ class MemoryApp(QMainWindow):
         )
 
         results = cursor.fetchall()
-        print(results)
+        if results:
+            print(results)
         return results
+    
+    def push_record_edit(self, record, node, edit_btn):
+
+        updated_text = self.unpushed_commits[record["id"]]
+        del self.unpushed_commits[record["id"]]
+        edit_btn.setEnabled(False)
+
+        cursor.execute(
+            """
+            UPDATE record 
+            SET text = ?
+            WHERE id = ?
+            """,
+            (updated_text, record["id"]),
+        )
+
+        conn.commit()
+
+        self.refresh_view()
+
+    
+    def record_edited(self, record, node, title_field, text_field, edit_btn):
+        original_text = record["text"]
+        print(f"original_text = {original_text}")
+        updated_text = ""
+
+        changed_title = title_field.text()
+        print(f"changed_title = {changed_title}")
+        changed_text = text_field.text()
+        print(f"changed_text = {changed_text}")
+
+        if changed_text.startswith(changed_title.replace("...", "")) or not changed_title:
+            changed_title = ""
+            updated_text = original_text
+        
+        else:
+            updated_text = "["+changed_title+"]"+changed_text
+        
+        print(updated_text)
+        print(original_text)
+        
+        if updated_text == original_text:
+            if edit_btn.isEnabled():
+                edit_btn.setEnabled(False)
+            if record["id"] in self.unpushed_commits:
+                del self.unpushed_commits[record["id"]]
+            return
+
+        edit_btn.setEnabled(True)
+        
+        self.unpushed_commits[record["id"]] = updated_text
+
+
 
     def update_record_lists(self):
         for name, (scroll, layout) in self.list_widgets.items():
@@ -390,8 +459,34 @@ class MemoryApp(QMainWindow):
                 widget = QWidget()
                 record_layout = QHBoxLayout(widget)
 
-                text = QLabel(record["text"])
+                title = QLineEdit(self.get_title(record["text"]))
+                text = QLineEdit(self.get_body(record["text"]))
+
                 edit_btn = QPushButton("E")
+                if record["id"] in self.unpushed_commits:
+                    edit_btn.setEnabled(True)
+                else:
+                    edit_btn.setEnabled(False)
+
+                edit_btn.clicked.connect(lambda btn_pyqt_inner_state, r=record, n=self.selected_child, _edit_btn=edit_btn: self.push_record_edit(
+                        r, n, _edit_btn
+                    )
+                )
+                
+                title.textEdited.connect(
+                    lambda new_text, r=record, n=self.selected_child, _title=title, _text=text, _edit_btn=edit_btn: self.record_edited(
+                        r, n, _title, _text, _edit_btn
+                    )
+                )
+
+                text.textEdited.connect(
+                    lambda new_text, r=record, n=self.selected_child, _title=title, _text=text, _edit_btn=edit_btn: self.record_edited(
+                        r, n, _title, _text, _edit_btn
+                    )
+                )
+                
+
+
                 check_above = QCheckBox("▲")
                 check_above.setChecked(record["show_above"])
                 check_above.stateChanged.connect(
@@ -415,6 +510,7 @@ class MemoryApp(QMainWindow):
                     lambda _, r=record, n=self.selected_child: self.delete_record(r, n)
                 )
 
+                record_layout.addWidget(title)
                 record_layout.addWidget(text)
                 record_layout.addWidget(edit_btn)
                 record_layout.addWidget(check_above)
@@ -595,7 +691,7 @@ class MemoryApp(QMainWindow):
                 params,
             )
 
-            return [
+            result = [
                 {
                     "id": row[RAW_QUERY_ID],
                     "origin": row[RAW_QUERY_ORIGIN],
@@ -606,6 +702,12 @@ class MemoryApp(QMainWindow):
                 }
                 for row in cursor.fetchall()
             ]
+
+            for rec in result:
+                if rec["id"] in self.unpushed_commits:
+                    rec["text"] = self.unpushed_commits[rec["id"]]
+
+            return result 
         except Exception as e:
             QMessageBox.critical(self, "Database Error", str(e))
             return []
