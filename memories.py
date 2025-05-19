@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 
-W, H = 1920, 1080
+W, H = 1920, 1080-200
 
 conn = sqlite3.connect("memory_map.db")
 cursor = conn.cursor()
@@ -301,7 +301,13 @@ class MemoryApp(QMainWindow):
     def select_record(self, record, node_key):
         current_selection_string = record["selected_list"]
         entities = set(current_selection_string.split(","))
-        entities.add(node_key)
+
+        if node_key in entities:
+            entities.remove(node_key)
+        else:
+            entities.add(node_key)
+
+        # entities.add(node_key)
         updated_selection_string = "," + ",".join([_ for _ in entities]) + ","
         updated_selection_string = updated_selection_string.replace(",,", ",")
 
@@ -441,10 +447,13 @@ class MemoryApp(QMainWindow):
             if not self.selected_child:
                 continue
 
+            is_select_possible = True
+
             if name == "Self":
                 records = self.get_records(origin=self.selected_child)
             elif name == "Selected":
                 records = self.get_records(selected_list=self.selected_child)
+                is_select_possible = False
             elif name == "High TF":
                 print("Fetching high TF: preparing Query")
                 records = self.get_records(show_below_parent=self.current_parent.key)
@@ -501,7 +510,7 @@ class MemoryApp(QMainWindow):
                         state, r, n
                     )
                 )
-                select_btn = QPushButton("Select")
+                select_btn = QPushButton("Select" if is_select_possible else "Detach")
                 select_btn.clicked.connect(
                     lambda _, r=record, n=self.selected_child: self.select_record(r, n)
                 )
